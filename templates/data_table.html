@@ -1,0 +1,25 @@
+{{ define "data_table" }}
+    <h2>検索結果 (Event: {{ .EventID }}, User: {{ .UserNo }})</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ range .Data }}
+            <tr>
+                <td>{{ .ID }}</td>
+                <td>{{ .Name }}</td>
+                <td>{{ .Value }}</td>
+            </tr>
+            {{ else }}
+            <tr>
+                <td colspan="3">データが見つかりませんでした。</td>
+            </tr>
+            {{ end }}
+        </tbody>
+    </table>
+{{ end }}

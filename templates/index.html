@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>データ表示</title>
+    <style>
+        /* モーダル用のCSS (簡易版、必要に応じて調整してください) */
+        .modal {
+            display: none; /* 初期状態では非表示 */
+            position: fixed; /* 画面に固定 */
+            z-index: 1000; /* 最前面に表示 */
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto; /* スクロール可能にする */
+            background-color: rgba(0,0,0,0.4); /* 半透明の背景 */
+            justify-content: center; /* 水平中央 */
+            align-items: center; /* 垂直中央 */
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto; /* 上下中央、左右中央 */
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%; /* 幅 */
+            max-width: 500px; /* 最大幅 */
+            position: relative;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        .close-button {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close-button:hover,
+        .close-button:focus {
+            color: black;
+            text-decoration: none;
+        }
+
+        body { font-family: sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        button { padding: 10px 15px; margin-top: 10px; cursor: pointer; }
+        input[type="text"] { padding: 8px; width: calc(100% - 20px); margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <h1>データ表示</h1>
+    <p>現在のEvent ID: <strong>{{ .EventID }}</strong></p>
+    <p>現在のUser No: <strong id="displayedUserNo">{{ .UserNo }}</strong></p>
+
+    <!-- userno入力ポップアップを開くボタン -->
+    <button id="openUserNoModal">userno入力</button>
+
+    <!-- eventidは変更されないので、隠しフィールドで保持 -->
+    <input type="hidden" id="currentEventId" value="{{ .EventID }}">
+
+    <!-- 検索結果が表示される領域 -->
+    <div id="dataDisplayArea">
+        {{ template "data_table" . }} <!-- 初回ロード時にdata_table.htmlを呼び出す -->
+    </div>
+
+    <!-- userno入力用のモーダルダイアログ -->
+    <div id="userNoModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button">&times;</span>
+            <h2>userno入力</h2>
+            <label for="inputUserNo">userno:</label>
+            <input type="text" id="inputUserNo" value="{{ .InitialUserNo }}">
+            <button id="submitUserNo">再表示</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const openModalBtn = document.getElementById('openUserNoModal');
+            const modal = document.getElementById('userNoModal');
+            const closeBtn = modal.querySelector('.close-button');
+            const submitBtn = document.getElementById('submitUserNo');
+            const inputUserNo = document.getElementById('inputUserNo');
+            const dataDisplayArea = document.getElementById('dataDisplayArea');
+            const displayedUserNoSpan = document.getElementById('displayedUserNo'); // メイン画面のuserno表示要素
+
+            const currentEventId = document.getElementById('currentEventId').value; 
+
+            // ポップアップを開く
+            openModalBtn.onclick = function() {
+                modal.style.display = 'flex'; // flexにして中央寄せを有効にする
+                // ポップアップを開いたときに、現在の表示usernoをinputフィールドにセット
+                inputUserNo.value = displayedUserNoSpan.textContent;
+            }
+
+            // ポップアップを閉じる (Xボタン)
+            closeBtn.onclick = function() {
+                modal.style.display = 'none';
+            }
+
+            // ポップアップを閉じる (モーダルの外側をクリック)
+            window.onclick = function(event) {
+                if (event.target == modal) {
+                    modal.style.display = 'none';
+                }
+            }
+
+            // 「再表示」ボタン押下時の処理
+            submitBtn.onclick = function() {
+                const newUserNo = inputUserNo.value;
+
+                // Ajaxリクエストを送信
+                // GETリクエストでパラメータを渡す
+                fetch(`/?eventid=${currentEventId}&userno=${newUserNo}`, {
+                    method: 'GET',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest' // Ajaxリクエストであることを示すヘッダー
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    // サーバーがHTMLフラグメントを返すので、テキストとして受け取る
+                    return response.text(); 
+                })
+                .then(htmlFragment => {
+                    // 受け取ったHTMLフラグメントで検索結果表示領域を更新
+                    dataDisplayArea.innerHTML = htmlFragment; 
+                    // メイン画面のuserno表示も更新
+                    displayedUserNoSpan.textContent = newUserNo; 
+                    modal.style.display = 'none'; // ポップアップを閉じる
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('データの取得に失敗しました。');
+                    modal.style.display = 'none'; // エラー時もポップアップを閉じる
+                });
+            }
+        });
+    </script>
+</body>
+</html>
