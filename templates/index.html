@@ -52,6 +52,32 @@
         th { background-color: #f2f2f2; }
         button { padding: 10px 15px; margin-top: 10px; cursor: pointer; }
         input[type="text"] { padding: 8px; width: calc(100% - 20px); margin-bottom: 10px; }
+
+        /* ユーザー検索結果リストのスタイル */
+        #searchResultsList {
+            list-style: none;
+            padding: 0;
+            margin-top: 15px;
+            max-height: 200px; /* スクロール可能にする */
+            overflow-y: auto;
+            border: 1px solid #eee;
+            border-radius: 4px;
+        }
+        #searchResultsList li {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+        }
+        #searchResultsList li:last-child {
+            border-bottom: none;
+        }
+        #searchResultsList li:hover {
+            background-color: #f0f0f0;
+        }
+        #searchResultsList li.selected {
+            background-color: #e0e0ff; /* 選択されたアイテムの背景色 */
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -59,8 +85,8 @@
     <p>現在のEvent ID: <strong>{{ .EventID }}</strong></p>
     <p>現在のUser No: <strong id="displayedUserNo">{{ .UserNo }}</strong></p>
 
-    <!-- userno入力ポップアップを開くボタン -->
-    <button id="openUserNoModal">userno入力</button>
+    <!-- ユーザー検索ポップアップを開くボタン -->
+    <button id="openUserSearchModal">ユーザ検索</button>
 
     <!-- eventidは変更されないので、隠しフィールドで保持 -->
     <input type="hidden" id="currentEventId" value="{{ .EventID }}">
@@ -70,34 +96,50 @@
         {{ template "data_table" . }} <!-- 初回ロード時にdata_table.htmlを呼び出す -->
     </div>
 
-    <!-- userno入力用のモーダルダイアログ -->
-    <div id="userNoModal" class="modal">
+    <!-- ユーザー検索用のモーダルダイアログ -->
+    <div id="userSearchModal" class="modal">
         <div class="modal-content">
             <span class="close-button">&times;</span>
-            <h2>userno入力</h2>
-            <label for="inputUserNo">userno:</label>
-            <input type="text" id="inputUserNo" value="{{ .InitialUserNo }}">
-            <button id="submitUserNo">再表示</button>
+            <h2>ユーザ検索</h2>
+            <label for="searchUserName">ユーザ名に含まれる文字列:</label>
+            <input type="text" id="searchUserName" placeholder="ユーザ名を入力">
+            <button id="searchUserBtn">検索</button>
+
+            <div id="searchResultsContainer">
+                <ul id="searchResultsList">
+                    <!-- 検索結果がここに動的に追加される -->
+                </ul>
+                <p id="noResultsMessage" style="display: none; color: gray;">検索結果がありません。</p>
+            </div>
+            
+            <button id="selectUserAndRefreshBtn" style="margin-top: 20px;" disabled>選択して再表示</button>
         </div>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            const openModalBtn = document.getElementById('openUserNoModal');
-            const modal = document.getElementById('userNoModal');
+            const openModalBtn = document.getElementById('openUserSearchModal');
+            const modal = document.getElementById('userSearchModal');
             const closeBtn = modal.querySelector('.close-button');
-            const submitBtn = document.getElementById('submitUserNo');
-            const inputUserNo = document.getElementById('inputUserNo');
+            const searchUserNameInput = document.getElementById('searchUserName');
+            const searchUserBtn = document.getElementById('searchUserBtn');
+            const searchResultsList = document.getElementById('searchResultsList');
+            const noResultsMessage = document.getElementById('noResultsMessage');
+            const selectUserAndRefreshBtn = document.getElementById('selectUserAndRefreshBtn');
             const dataDisplayArea = document.getElementById('dataDisplayArea');
-            const displayedUserNoSpan = document.getElementById('displayedUserNo'); // メイン画面のuserno表示要素
+            const displayedUserNoSpan = document.getElementById('displayedUserNo');
 
-            const currentEventId = document.getElementById('currentEventId').value; 
+            const currentEventId = document.getElementById('currentEventId').value;
+            let selectedUserNo = null; // 選択されたusernoを保持する変数
 
             // ポップアップを開く
             openModalBtn.onclick = function() {
-                modal.style.display = 'flex'; // flexにして中央寄せを有効にする
-                // ポップアップを開いたときに、現在の表示usernoをinputフィールドにセット
-                inputUserNo.value = displayedUserNoSpan.textContent;
+                modal.style.display = 'flex';
+                searchUserNameInput.value = ''; // 検索フィールドをクリア
+                searchResultsList.innerHTML = ''; // 検索結果をクリア
+                noResultsMessage.style.display = 'none';
+                selectUserAndRefreshBtn.disabled = true; // ボタンを無効化
+                selectedUserNo = null; // 選択状態をリセット
             }
 
             // ポップアップを閉じる (Xボタン)
@@ -112,36 +154,79 @@
                 }
             }
 
-            // 「再表示」ボタン押下時の処理
-            submitBtn.onclick = function() {
-                const newUserNo = inputUserNo.value;
+            // ユーザー名検索ボタン押下時の処理
+            searchUserBtn.onclick = function() {
+                const nameQuery = searchUserNameInput.value;
+                searchResultsList.innerHTML = ''; // 既存の検索結果をクリア
+                noResultsMessage.style.display = 'none';
+                selectUserAndRefreshBtn.disabled = true;
+                selectedUserNo = null;
 
-                // Ajaxリクエストを送信
-                // GETリクエストでパラメータを渡す
-                fetch(`/?eventid=${currentEventId}&userno=${newUserNo}`, {
+                fetch(`/search-users?name=${encodeURIComponent(nameQuery)}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json(); // JSONレスポンスをパース
+                })
+                .then(users => {
+                    if (users.length === 0) {
+                        noResultsMessage.style.display = 'block';
+                    } else {
+                        users.forEach(user => {
+                            const li = document.createElement('li');
+                            li.textContent = `${user.username} (No: ${user.userno})`;
+                            li.dataset.userno = user.userno; // usernoをカスタムデータ属性として保持
+                            li.dataset.username = user.username; // usernameも保持 (表示用)
+                            li.onclick = function() {
+                                // 選択状態のスタイルをリセット
+                                document.querySelectorAll('#searchResultsList li').forEach(item => {
+                                    item.classList.remove('selected');
+                                });
+                                // クリックされたアイテムを選択状態にする
+                                li.classList.add('selected');
+                                selectedUserNo = user.userno;
+                                selectUserAndRefreshBtn.disabled = false; // 選択ボタンを有効化
+                            };
+                            searchResultsList.appendChild(li);
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error searching users:', error);
+                    alert('ユーザー検索に失敗しました。');
+                });
+            }
+
+            // 「選択して再表示」ボタン押下時の処理
+            selectUserAndRefreshBtn.onclick = function() {
+                if (!selectedUserNo) {
+                    alert('ユーザーを選択してください。');
+                    return;
+                }
+
+                // メイン画面のデータ更新Ajaxリクエストを送信 (前回と同じロジック)
+                fetch(`/?eventid=${currentEventId}&userno=${selectedUserNo}`, {
                     method: 'GET',
                     headers: {
-                        'X-Requested-With': 'XMLHttpRequest' // Ajaxリクエストであることを示すヘッダー
+                        'X-Requested-With': 'XMLHttpRequest'
                     }
                 })
                 .then(response => {
                     if (!response.ok) {
                         throw new Error('Network response was not ok');
                     }
-                    // サーバーがHTMLフラグメントを返すので、テキストとして受け取る
-                    return response.text(); 
+                    return response.text();
                 })
                 .then(htmlFragment => {
-                    // 受け取ったHTMLフラグメントで検索結果表示領域を更新
-                    dataDisplayArea.innerHTML = htmlFragment; 
-                    // メイン画面のuserno表示も更新
-                    displayedUserNoSpan.textContent = newUserNo; 
+                    dataDisplayArea.innerHTML = htmlFragment;
+                    displayedUserNoSpan.textContent = selectedUserNo; // メイン画面のuserno表示を更新
                     modal.style.display = 'none'; // ポップアップを閉じる
                 })
                 .catch(error => {
-                    console.error('Error:', error);
-                    alert('データの取得に失敗しました。');
-                    modal.style.display = 'none'; // エラー時もポップアップを閉じる
+                    console.error('Error refreshing main data:', error);
+                    alert('メインデータの更新に失敗しました。');
+                    modal.style.display = 'none';
                 });
             }
         });
