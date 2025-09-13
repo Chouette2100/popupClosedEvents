@@ -1,24 +1,39 @@
+// Copyright © 2025 chouette2100@gmail.com
+// Released under the MIT license
+// https://opensource.org/licenses/mit-license.php
 /*
-はい、もちろんです。ポップアップ内でユーザー名検索を行い、その結果から `userno` を選択してメイン画面のデータを更新する、という一連の処理も、前回のAjax通信の仕組みを応用することで実現可能です。
+ClosedEventsHandler()等において、ユーザー名あるいはイベント名から検索して該当するイベント一覧を表示するための手法の検討
 
-基本的な考え方は、**ポップアップ内でさらにAjax通信を行い、ユーザー名検索の結果を動的に表示する**というものです。
+Gemini-2.5-flashによるのコード生成(id=2321)
 
-以下に、具体的な実装方法の概要とコード例を示します。
+はい、承知いたしました。ポップアップが複数あるケース、特に「イベント検索」と「ユーザー検索」の2つのモーグダルダイアログを連携させる例を作成します。
+
+このケースでは、単に処理を二つ並べるだけでなく、以下の点に工夫が必要です。
+
+1.  **グローバルな状態管理**: 現在選択されている `eventid` と `userno` をJavaScriptの変数として管理し、どちらのモーダルからでも参照・更新できるようにします。
+2.  **モーダルの排他制御**: 複数のモーダルが同時に開かないように、一方を開くときに他方を閉じる処理を入れます。
+3.  **メイン画面更新の共通化**: どちらのモーダルで値が選択されても、最終的にメイン画面のデータを更新する処理は共通化します。
 
 ---
 
 ### 実装の全体像
 
 1.  **Goハンドラーの追加**:
-  - ユーザー名検索リクエストを受け付け、`userno` と `username` のリストをJSON形式で返す新しいエンドポイント（例: `/search-users`）を追加します。
+  - イベント名検索リクエストを受け付け、`eventno` と `eventname` のリストをJSON形式で返す新しいエンドポイント（例: `/search-events`）を追加します。
+  - 既存の `/search-users` ハンドラーはそのまま使用します。
 
 2.  **HTML/CSSの変更**:
-  - ポップアップ内に、ユーザー名入力用のテキストフィールド、検索ボタン、検索結果を表示する領域（例: `<ul>` リスト）を追加します。
+  - 「イベント検索」ボタンと、それに対応する新しいモーダルダイアログ (`id="eventSearchModal"`) を追加します。
+  - 既存の「ユーザー検索」モーダル (`id="userSearchModal"`) はそのまま使用します。
+  - メイン画面に表示される `Event ID` と `User No` の表示箇所を更新します。
 
 3.  **JavaScriptの変更**:
-  - ポップアップ内の「検索」ボタンが押されたら、入力されたユーザー名をサーバーの `/search-users` エンドポイントにAjaxリクエストで送信します。
-  - サーバーからのJSONレスポンスを受け取り、ポップアップ内の検索結果表示領域をJavaScriptで動的に構築します。
-  - ユーザーが検索結果リストからユーザー名を選択（クリック）したら、その `userno` を取得し、前回の「再表示」ボタンと同様に、メイン画面のデータ更新Ajaxリクエストを送信します。
+  - `currentEventId` と `currentUserNo` をJavaScriptの変数として管理します。
+  - イベント検索モーダルとユーザー検索モーダルの開閉ロジックをそれぞれ実装します。
+  - 各モーダルを開く際に、もう一方のモーダルがもし開いていたら閉じる処理を追加します。
+  - イベント検索モーダル内でイベント名検索を行い、結果リストから選択された `eventno` を `currentEventId` に設定します。
+  - ユーザー検索モーダル内でユーザー名検索を行い、結果リストから選択された `userno` を `currentUserNo` に設定します。
+  - `currentEventId` または `currentUserNo` が更新されたら、共通の `refreshMainData()` 関数を呼び出してメイン画面のデータを更新します。
 
 ---
 
@@ -30,20 +45,22 @@
 
 ```go
 
-v0.0.0  gemini-2.5-flashによるのコード生成(id=2308)
-v0.0.1  .gitignoreを追加
-v0.1.0  複数ダイアログに対応する（id=2321）
+v0.0.0  ユーザー番号によりイベントを絞り込み一覧を表示する。gemini-2.5-flashでコードを生成する(id=2308)
+v0.0.1  .gitignoreを追加する
+v0.1.0  ユーザー番号による検索から、ユーザー名による絞り込みに変更する（id=2311）
+v0.1.2  ユーザー名とイベント名の絞り込みがあり、ダイアログが複数必要なケースを作成する（id=2321）
+
 */
 package main
 
 import (
 	"crypto/tls"
-	"encoding/json" // JSONを扱うために追加
+	"encoding/json"
 	"html/template"
 	"log"
 	"net/http"
 	"strconv"
-	"strings" // 部分一致検索のために追加
+	"strings"
 	"time"
 )
 
@@ -58,6 +75,12 @@ type Data struct {
 type User struct {
 	UserNo   string `json:"userno"`
 	UserName string `json:"username"`
+}
+
+// イベント検索結果のデータ構造 (新規追加)
+type Event struct {
+	EventNo   string `json:"eventno"`
+	EventName string `json:"eventname"`
 }
 
 // テンプレートに渡すデータ構造
@@ -77,7 +100,8 @@ func init() {
 
 func main() {
 	http.HandleFunc("/", handler)
-	http.HandleFunc("/search-users", searchUsersHandler) // 新しいハンドラーを追加
+	http.HandleFunc("/search-users", searchUsersHandler)
+	http.HandleFunc("/search-events", searchEventsHandler) // 新しいハンドラーを追加
 	// log.Fatal(http.ListenAndServe(":8080", nil))
 
 	// HTTPサーバーを設定
@@ -96,6 +120,7 @@ func main() {
 	if err != nil {
 		log.Println("Server error:", err)
 	}
+
 }
 
 // メイン画面の表示とデータ更新を行うハンドラー (前回とほぼ同じ)
@@ -104,10 +129,10 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	userno := r.FormValue("userno")
 
 	if eventid == "" {
-		eventid = "1"
+		eventid = "1" // 初期値
 	}
 	if userno == "" {
-		userno = "0"
+		userno = "0" // 初期値
 	}
 
 	fetchedData := fetchDataFromDB(eventid, userno)
@@ -137,18 +162,27 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ユーザー名検索を行う新しいハンドラー
+// ユーザー名検索を行うハンドラー (前回と同じ)
 func searchUsersHandler(w http.ResponseWriter, r *http.Request) {
-	queryName := r.FormValue("name") // 検索文字列を取得
+	queryName := r.FormValue("name")
 
-	// ユーザー名検索を実行
 	foundUsers := searchUsersFromDBByName(queryName)
 
-	// レスポンスヘッダーにContent-Type: application/jsonを設定
 	w.Header().Set("Content-Type", "application/json")
-
-	// 検索結果をJSON形式でエンコードして返す
 	if err := json.NewEncoder(w).Encode(foundUsers); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+// イベント名検索を行う新しいハンドラー
+func searchEventsHandler(w http.ResponseWriter, r *http.Request) {
+	queryName := r.FormValue("name")
+
+	foundEvents := searchEventsFromDBByName(queryName)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(foundEvents); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -168,30 +202,51 @@ func fetchDataFromDB(eventid, userno string) []Data {
 	return data
 }
 
-// ユーザー名で検索するダミー関数
+// ユーザー名で検索するダミー関数 (前回と同じ)
 func searchUsersFromDBByName(name string) []User {
 	log.Printf("Searching users with name: %s", name)
-	// 実際にはここでDBアクセスを行い、部分一致検索を実行
 	allUsers := []User{
 		{UserNo: "101", UserName: "田中 太郎"},
 		{UserNo: "102", UserName: "山田 花子"},
 		{UserNo: "103", UserName: "鈴木 一郎"},
 		{UserNo: "201", UserName: "佐藤 次郎"},
 		{UserNo: "202", UserName: "高橋 三郎"},
-		{UserNo: "301", UserName: "田中 次郎"}, // 同姓同名も考慮
+		{UserNo: "301", UserName: "田中 次郎"},
 	}
 
 	var results []User
 	if name == "" {
-		// 検索文字列が空の場合は全件返すか、何も返さないか、要件による
-		// 今回は全件返す例
 		return allUsers
 	}
 
 	for _, user := range allUsers {
-		// 大文字小文字を区別しない部分一致検索
 		if strings.Contains(strings.ToLower(user.UserName), strings.ToLower(name)) {
 			results = append(results, user)
+		}
+	}
+	return results
+}
+
+// イベント名で検索するダミー関数 (新規追加)
+func searchEventsFromDBByName(name string) []Event {
+	log.Printf("Searching events with name: %s", name)
+	allEvents := []Event{
+		{EventNo: "1", EventName: "新入社員研修"},
+		{EventNo: "2", EventName: "Go言語勉強会"},
+		{EventNo: "3", EventName: "WebAssembly入門"},
+		{EventNo: "4", EventName: "社内ハッカソン"},
+		{EventNo: "5", EventName: "Go開発者会議"},
+		{EventNo: "10", EventName: "Go開発者会議2024"},
+	}
+
+	var results []Event
+	if name == "" {
+		return allEvents
+	}
+
+	for _, event := range allEvents {
+		if strings.Contains(strings.ToLower(event.EventName), strings.ToLower(name)) {
+			results = append(results, event)
 		}
 	}
 	return results
@@ -203,51 +258,55 @@ func searchUsersFromDBByName(name string) []User {
 **`templates/index.html`** (ページ全体を構成するテンプレート)
 
 ```html
-
 ```
 
 **`templates/data_table.html`** (前回と同じ)
 
 ```html
-
 ```
 
 ---
 
 ### 変更点の解説
 
-1.  **Go側の変更 (`main.go`)**:
-    *   `User` 構造体を追加し、JSONエンコード時にフィールド名が小文字になるように `json:"userno"` などのタグを付けました。
-    *   `searchUsersFromDBByName(name string) []User` 関数を追加しました。これはダミーデータに対して `strings.Contains` を使って部分一致検索を行います。実際にはデータベースの `LIKE` 句などを使用します。
-    *   新しいハンドラー `searchUsersHandler(w http.ResponseWriter, r *http.Request)` を追加しました。
-        *   `r.FormValue("name")` で検索クエリを取得します。
-        *   `searchUsersFromDBByName` を呼び出してユーザーリストを取得します。
-        *   `w.Header().Set("Content-Type", "application/json")` でレスポンスがJSONであることをブラウザに伝えます。
-        *   `json.NewEncoder(w).Encode(foundUsers)` でユーザーリストをJSON形式でレスポンスボディに書き込みます。
-    *   `http.HandleFunc("/search-users", searchUsersHandler)` でこの新しいハンドラーを登録しました。
+#### Go側の変更 (`main.go`)
 
-2.  **HTML/CSSの変更 (`templates/index.html`)**:
-    *   ポップアップのタイトルを「ユーザ検索」に変更しました。
-    *   `userno` 入力フィールドを削除し、代わりに `searchUserName` というIDのテキスト入力フィールドと `searchUserBtn` というIDの検索ボタンを追加しました。
-    *   検索結果を表示するための空の `<ul>` 要素 (`id="searchResultsList"`) と、結果がない場合に表示するメッセージ (`id="noResultsMessage"`) を追加しました。
-    *   検索結果から選択された `userno` を使ってメイン画面を更新するための「選択して再表示」ボタン (`id="selectUserAndRefreshBtn"`) を追加しました。このボタンは初期状態では `disabled` にしておき、ユーザーがリストから選択したときに有効化します。
-    *   検索結果リスト (`#searchResultsList`) と選択されたアイテム (`.selected`) のためのCSSを追加しました。
+*   `Event` 構造体を追加しました。
+*   `searchEventsFromDBByName(name string) []Event` ダミー関数を追加しました。これはイベント名で部分一致検索を行います。
+*   `searchEventsHandler(w http.ResponseWriter, r *http.Request)` を追加し、`/search-events` エンドポイントでイベント検索結果をJSONで返すようにしました。
+*   `main` 関数で `http.HandleFunc("/search-events", searchEventsHandler)` を追加し、新しいハンドラーを登録しました。
 
-3.  **JavaScriptの変更 (`templates/index.html` 内の `<script>`)**:
-    *   **ポップアップ表示時**: 検索フィールドや結果リストをクリアし、選択ボタンを無効化する処理を追加しました。`selectedUserNo` 変数もリセットします。
-    *   **`searchUserBtn` (検索ボタン) クリック時**:
-        *   `searchUserNameInput.value` から検索文字列を取得します。
-        *   `fetch(`/search-users?name=${encodeURIComponent(nameQuery)}`)` を使って、新しい `/search-users` エンドポイントにAjaxリクエストを送信します。`encodeURIComponent` で検索文字列をURLエンコードしています。
-        *   レスポンスはJSON形式なので、`response.json()` でパースします。
-        *   取得した `users` 配列をループし、各ユーザーに対して `<li>` 要素を作成します。
-        *   `li.dataset.userno = user.userno;` のように、カスタムデータ属性 (`data-userno`) を使って `userno` をHTML要素に埋め込みます。これにより、後で選択されたときに簡単に `userno` を取得できます。
-        *   各 `<li>` にクリックイベントリスナーを追加し、クリックされたらそのアイテムを選択状態にし、`selectedUserNo` 変数に `userno` を格納し、「選択して再表示」ボタンを有効化します。
-        *   検索結果がない場合は `noResultsMessage` を表示します。
-    *   **`selectUserAndRefreshBtn` (選択して再表示ボタン) クリック時**:
-        *   `selectedUserNo` に値があるか確認します。
-        *   前回の「再表示」ボタンと同じロジックで、`currentEventId` と `selectedUserNo` を使ってメイン画面のデータ更新Ajaxリクエスト (`/?eventid=...&userno=...`) を送信します。
-        *   レスポンスのHTMLフラグメントで `dataDisplayArea` を更新し、`displayedUserNoSpan` も更新します。
-        *   ポップアップを閉じます。
+#### HTML/CSSの変更 (`templates/index.html`)
+
+*   **イベント検索ボタン**: `<button id="openEventSearchModal">イベント検索</button>` を追加しました。
+*   **イベント検索モーダル**:
+    *   `id="eventSearchModal"` を持つ新しいモーダルダイアログのHTML構造を追加しました。
+    *   内部にはイベント名入力用の `<input type="text" id="searchEventName">`、検索ボタン `<button id="searchEventBtn">`、検索結果表示用の `<ul id="searchEventsList" class="searchResultsList">`、そして「選択して再表示」ボタン `<button id="selectEventAndRefreshBtn">` があります。
+*   **メイン画面の表示**: `Event ID` と `User No` の表示を `<strong>` タグ内の `id="displayedEventId"` と `id="displayedUserNo"` に変更し、JavaScriptから更新できるようにしました。
+*   **初期値の保持**: `eventid` と `userno` の初期値をJavaScriptで取得するために、`<input type="hidden" id="initialEventId" value="{{ .EventID }}">` と `<input type="hidden" id="initialUserNo" value="{{ .UserNo }}">` を追加しました。
+*   **CSSの共通化**: 検索結果リストのスタイルを `.searchResultsList` クラスとして定義し、両方のモーダルで利用するようにしました。ユーザー検索リストのIDも `searchUsersList` に変更し、重複を避けました。
+
+#### JavaScriptの変更 (`templates/index.html` 内の `<script>`)
+
+1.  **グローバル状態変数**:
+    *   `let currentEventId` と `let currentUserNo` を定義し、隠しフィールドから初期値を取得するようにしました。これらの変数が、現在メイン画面に表示されているデータに対応するIDを保持します。
+2.  **DOM要素の取得**:
+    *   新しいイベント検索モーダルに関連するすべてのDOM要素を取得しました。
+3.  **共通関数 `closeModal(modalElement)`**:
+    *   指定されたモーダル要素を非表示にするシンプルな関数です。
+4.  **共通関数 `refreshMainData()`**:
+    *   `currentEventId` と `currentUserNo` の現在の値を使って、メイン画面のデータ (`/?eventid=...&userno=...`) をAjaxで再取得し、`dataDisplayArea` を更新します。
+    *   `displayedEventIdSpan` と `displayedUserNoSpan` の表示も更新します。
+5.  **イベント検索モーダル処理**:
+    *   `openEventModalBtn.onclick`: イベント検索モーダルを開く際に、**まず `userModal` を閉じる**処理を追加しました。その後、イベント検索モーダルを初期化して表示します。
+    *   `searchEventBtn.onclick`: 入力されたイベント名で `/search-events` エンドポイントにAjaxリクエストを送信し、結果を `searchEventsList` に動的に表示します。
+    *   リストの `<li>` 要素がクリックされたら、`selectedEventNo` にそのイベントのIDを格納し、「選択して再表示」ボタンを有効化します。
+    *   `selectEventAndRefreshBtn.onclick`: `selectedEventNo` を `currentEventId` に設定し、**`refreshMainData()` を呼び出してメイン画面を更新**します。その後、モーダルを閉じます。
+6.  **ユーザー検索モーダル処理**:
+    *   `openUserModalBtn.onclick`: ユーザー検索モーダルを開く際に、**まず `eventModal` を閉じる**処理を追加しました。その後、ユーザー検索モーダルを初期化して表示します。
+    *   `searchUserBtn.onclick`: ユーザー名検索のロジックは前回と同じですが、検索結果リストのIDを `searchUsersList` に変更しました。
+    *   `selectUserAndRefreshBtn.onclick`: `selectedUserNo` を `currentUserNo` に設定し、**`refreshMainData()` を呼び出してメイン画面を更新**します。その後、モーダルを閉じます。
+7.  **`window.onclick`**: モーダルの外側をクリックしたときに閉じる処理も、両方のモーダルに対応するように修正しました。
 
 ---
 
@@ -257,7 +316,10 @@ func searchUsersFromDBByName(name string) []User {
 2.  `go run main.go` でサーバーを起動します。
 3.  ブラウザで `http://localhost:8080` にアクセスします。
 
-「ユーザ検索」ボタンを押すとポップアップが開き、ユーザー名を入力して「検索」ボタンを押すと、検索結果がリストで表示されます。リストからユーザーを選択し、「選択して再表示」ボタンを押すと、メイン画面のデータが更新されます。
+「イベント検索」ボタンを押すとイベント検索モーダルが開き、イベント名で検索・選択できます。
+「ユーザ検索」ボタンを押すとユーザー検索モーダルが開き、ユーザー名で検索・選択できます。
 
-この構成で、ご要望の「ポップアップ内でユーザー検索を行い、結果を選択してメイン画面を更新する」という複雑なフローを実現できます。
+どちらかのモーダルで選択を行い「選択して再表示」ボタンを押すと、メイン画面のデータが、その時点で確定している `Event ID` と `User No` の両方を使って更新されます。
+
+この構成により、複数のモーダルダイアログが連携し、メイン画面の状態を更新する、より複雑なアプリケーションフローを実現できます。JavaScriptで `currentEventId` と `currentUserNo` を一元的に管理し、`refreshMainData()` 関数でメイン画面の更新処理を共通化している点がポイントです。
 */

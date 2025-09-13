@@ -53,8 +53,8 @@
         button { padding: 10px 15px; margin-top: 10px; cursor: pointer; }
         input[type="text"] { padding: 8px; width: calc(100% - 20px); margin-bottom: 10px; }
 
-        /* ユーザー検索結果リストのスタイル */
-        #searchResultsList {
+        /* 検索結果リストのスタイル (共通化のためクラス名に変更) */
+        .searchResultsList {
             list-style: none;
             padding: 0;
             margin-top: 15px;
@@ -63,18 +63,18 @@
             border: 1px solid #eee;
             border-radius: 4px;
         }
-        #searchResultsList li {
+        .searchResultsList li {
             padding: 10px;
             border-bottom: 1px solid #eee;
             cursor: pointer;
         }
-        #searchResultsList li:last-child {
+        .searchResultsList li:last-child {
             border-bottom: none;
         }
-        #searchResultsList li:hover {
+        .searchResultsList li:hover {
             background-color: #f0f0f0;
         }
-        #searchResultsList li.selected {
+        .searchResultsList li.selected {
             background-color: #e0e0ff; /* 選択されたアイテムの背景色 */
             font-weight: bold;
         }
@@ -82,34 +82,57 @@
 </head>
 <body>
     <h1>データ表示</h1>
-    <p>現在のEvent ID: <strong>{{ .EventID }}</strong></p>
+    <p>現在のEvent ID: <strong id="displayedEventId">{{ .EventID }}</strong></p>
     <p>現在のUser No: <strong id="displayedUserNo">{{ .UserNo }}</strong></p>
 
+    <!-- イベント検索ポップアップを開くボタン -->
+    <button id="openEventSearchModal">イベント検索</button>
     <!-- ユーザー検索ポップアップを開くボタン -->
     <button id="openUserSearchModal">ユーザ検索</button>
 
-    <!-- eventidは変更されないので、隠しフィールドで保持 -->
-    <input type="hidden" id="currentEventId" value="{{ .EventID }}">
+    <!-- eventidとusernoはJavaScriptで管理するため、初期値のみ設定 -->
+    <input type="hidden" id="initialEventId" value="{{ .EventID }}">
+    <input type="hidden" id="initialUserNo" value="{{ .UserNo }}">
 
     <!-- 検索結果が表示される領域 -->
     <div id="dataDisplayArea">
         {{ template "data_table" . }} <!-- 初回ロード時にdata_table.htmlを呼び出す -->
     </div>
 
-    <!-- ユーザー検索用のモーダルダイアログ -->
+    <!-- イベント検索用のモーダルダイアログ (新規追加) -->
+    <div id="eventSearchModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button event-close-button">&times;</span>
+            <h2>イベント検索</h2>
+            <label for="searchEventName">イベント名に含まれる文字列:</label>
+            <input type="text" id="searchEventName" placeholder="イベント名を入力">
+            <button id="searchEventBtn">検索</button>
+
+            <div id="eventSearchResultsContainer">
+                <ul id="searchEventsList" class="searchResultsList">
+                    <!-- 検索結果がここに動的に追加される -->
+                </ul>
+                <p id="noEventResultsMessage" style="display: none; color: gray;">検索結果がありません。</p>
+            </div>
+            
+            <button id="selectEventAndRefreshBtn" style="margin-top: 20px;" disabled>選択して再表示</button>
+        </div>
+    </div>
+
+    <!-- ユーザー検索用のモーダルダイアログ (前回から変更なし) -->
     <div id="userSearchModal" class="modal">
         <div class="modal-content">
-            <span class="close-button">&times;</span>
+            <span class="close-button user-close-button">&times;</span>
             <h2>ユーザ検索</h2>
             <label for="searchUserName">ユーザ名に含まれる文字列:</label>
             <input type="text" id="searchUserName" placeholder="ユーザ名を入力">
             <button id="searchUserBtn">検索</button>
 
-            <div id="searchResultsContainer">
-                <ul id="searchResultsList">
+            <div id="userSearchResultsContainer">
+                <ul id="searchUsersList" class="searchResultsList"> <!-- IDをsearchResultsListからsearchUsersListに変更 -->
                     <!-- 検索結果がここに動的に追加される -->
                 </ul>
-                <p id="noResultsMessage" style="display: none; color: gray;">検索結果がありません。</p>
+                <p id="noUserResultsMessage" style="display: none; color: gray;">検索結果がありません。</p>
             </div>
             
             <button id="selectUserAndRefreshBtn" style="margin-top: 20px;" disabled>選択して再表示</button>
@@ -118,95 +141,47 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            const openModalBtn = document.getElementById('openUserSearchModal');
-            const modal = document.getElementById('userSearchModal');
-            const closeBtn = modal.querySelector('.close-button');
-            const searchUserNameInput = document.getElementById('searchUserName');
-            const searchUserBtn = document.getElementById('searchUserBtn');
-            const searchResultsList = document.getElementById('searchResultsList');
-            const noResultsMessage = document.getElementById('noResultsMessage');
-            const selectUserAndRefreshBtn = document.getElementById('selectUserAndRefreshBtn');
+            // グローバル変数として現在のEvent IDとUser Noを保持
+            let currentEventId = document.getElementById('initialEventId').value;
+            let currentUserNo = document.getElementById('initialUserNo').value;
+
+            // DOM要素の取得
             const dataDisplayArea = document.getElementById('dataDisplayArea');
+            const displayedEventIdSpan = document.getElementById('displayedEventId');
             const displayedUserNoSpan = document.getElementById('displayedUserNo');
 
-            const currentEventId = document.getElementById('currentEventId').value;
-            let selectedUserNo = null; // 選択されたusernoを保持する変数
+            // --- イベント検索モーダル関連 ---
+            const openEventModalBtn = document.getElementById('openEventSearchModal');
+            const eventModal = document.getElementById('eventSearchModal');
+            const eventCloseBtn = eventModal.querySelector('.event-close-button');
+            const searchEventNameInput = document.getElementById('searchEventName');
+            const searchEventBtn = document.getElementById('searchEventBtn');
+            const searchEventsList = document.getElementById('searchEventsList');
+            const noEventResultsMessage = document.getElementById('noEventResultsMessage');
+            const selectEventAndRefreshBtn = document.getElementById('selectEventAndRefreshBtn');
+            let selectedEventNo = null; // イベント検索モーダル内で選択されたEventNo
 
-            // ポップアップを開く
-            openModalBtn.onclick = function() {
-                modal.style.display = 'flex';
-                searchUserNameInput.value = ''; // 検索フィールドをクリア
-                searchResultsList.innerHTML = ''; // 検索結果をクリア
-                noResultsMessage.style.display = 'none';
-                selectUserAndRefreshBtn.disabled = true; // ボタンを無効化
-                selectedUserNo = null; // 選択状態をリセット
+            // --- ユーザー検索モーダル関連 ---
+            const openUserModalBtn = document.getElementById('openUserSearchModal');
+            const userModal = document.getElementById('userSearchModal');
+            const userCloseBtn = userModal.querySelector('.user-close-button');
+            const searchUserNameInput = document.getElementById('searchUserName');
+            const searchUserBtn = document.getElementById('searchUserBtn');
+            const searchUsersList = document.getElementById('searchUsersList'); // IDをsearchResultsListからsearchUsersListに変更
+            const noUserResultsMessage = document.getElementById('noUserResultsMessage');
+            const selectUserAndRefreshBtn = document.getElementById('selectUserAndRefreshBtn');
+            let selectedUserNo = null; // ユーザー検索モーダル内で選択されたUserNo
+
+            // --- 共通関数 ---
+
+            // 指定されたモーダルを閉じる
+            function closeModal(modalElement) {
+                modalElement.style.display = 'none';
             }
 
-            // ポップアップを閉じる (Xボタン)
-            closeBtn.onclick = function() {
-                modal.style.display = 'none';
-            }
-
-            // ポップアップを閉じる (モーダルの外側をクリック)
-            window.onclick = function(event) {
-                if (event.target == modal) {
-                    modal.style.display = 'none';
-                }
-            }
-
-            // ユーザー名検索ボタン押下時の処理
-            searchUserBtn.onclick = function() {
-                const nameQuery = searchUserNameInput.value;
-                searchResultsList.innerHTML = ''; // 既存の検索結果をクリア
-                noResultsMessage.style.display = 'none';
-                selectUserAndRefreshBtn.disabled = true;
-                selectedUserNo = null;
-
-                fetch(`/search-users?name=${encodeURIComponent(nameQuery)}`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    return response.json(); // JSONレスポンスをパース
-                })
-                .then(users => {
-                    if (users.length === 0) {
-                        noResultsMessage.style.display = 'block';
-                    } else {
-                        users.forEach(user => {
-                            const li = document.createElement('li');
-                            li.textContent = `${user.username} (No: ${user.userno})`;
-                            li.dataset.userno = user.userno; // usernoをカスタムデータ属性として保持
-                            li.dataset.username = user.username; // usernameも保持 (表示用)
-                            li.onclick = function() {
-                                // 選択状態のスタイルをリセット
-                                document.querySelectorAll('#searchResultsList li').forEach(item => {
-                                    item.classList.remove('selected');
-                                });
-                                // クリックされたアイテムを選択状態にする
-                                li.classList.add('selected');
-                                selectedUserNo = user.userno;
-                                selectUserAndRefreshBtn.disabled = false; // 選択ボタンを有効化
-                            };
-                            searchResultsList.appendChild(li);
-                        });
-                    }
-                })
-                .catch(error => {
-                    console.error('Error searching users:', error);
-                    alert('ユーザー検索に失敗しました。');
-                });
-            }
-
-            // 「選択して再表示」ボタン押下時の処理
-            selectUserAndRefreshBtn.onclick = function() {
-                if (!selectedUserNo) {
-                    alert('ユーザーを選択してください。');
-                    return;
-                }
-
-                // メイン画面のデータ更新Ajaxリクエストを送信 (前回と同じロジック)
-                fetch(`/?eventid=${currentEventId}&userno=${selectedUserNo}`, {
+            // メイン画面のデータを更新する関数
+            function refreshMainData() {
+                fetch(`/?eventid=${currentEventId}&userno=${currentUserNo}`, {
                     method: 'GET',
                     headers: {
                         'X-Requested-With': 'XMLHttpRequest'
@@ -220,14 +195,157 @@
                 })
                 .then(htmlFragment => {
                     dataDisplayArea.innerHTML = htmlFragment;
-                    displayedUserNoSpan.textContent = selectedUserNo; // メイン画面のuserno表示を更新
-                    modal.style.display = 'none'; // ポップアップを閉じる
+                    displayedEventIdSpan.textContent = currentEventId; // メイン画面のEvent ID表示を更新
+                    displayedUserNoSpan.textContent = currentUserNo;   // メイン画面のUser No表示を更新
                 })
                 .catch(error => {
                     console.error('Error refreshing main data:', error);
                     alert('メインデータの更新に失敗しました。');
-                    modal.style.display = 'none';
                 });
+            }
+
+            // --- イベント検索モーダル処理 ---
+
+            openEventModalBtn.onclick = function() {
+                closeModal(userModal); // 他のモーダルが開いていたら閉じる
+                eventModal.style.display = 'flex';
+                searchEventNameInput.value = '';
+                searchEventsList.innerHTML = '';
+                noEventResultsMessage.style.display = 'none';
+                selectEventAndRefreshBtn.disabled = true;
+                selectedEventNo = null;
+            }
+
+            eventCloseBtn.onclick = function() {
+                closeModal(eventModal);
+            }
+
+            searchEventBtn.onclick = function() {
+                const nameQuery = searchEventNameInput.value;
+                searchEventsList.innerHTML = ''; // 既存の検索結果をクリア
+                noEventResultsMessage.style.display = 'none';
+                selectEventAndRefreshBtn.disabled = true;
+                selectedEventNo = null;
+
+                fetch(`/search-events?name=${encodeURIComponent(nameQuery)}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json(); // JSONレスポンスをパース
+                })
+                .then(events => {
+                    if (events.length === 0) {
+                        noEventResultsMessage.style.display = 'block';
+                    } else {
+                        events.forEach(event => {
+                            const li = document.createElement('li');
+                            li.textContent = `${event.eventname} (ID: ${event.eventno})`;
+                            li.dataset.eventno = event.eventno; // eventnoをカスタムデータ属性として保持
+                            li.onclick = function() {
+                                // 選択状態のスタイルをリセット
+                                document.querySelectorAll('#searchEventsList li').forEach(item => {
+                                    item.classList.remove('selected');
+                                });
+                                // クリックされたアイテムを選択状態にする
+                                li.classList.add('selected');
+                                selectedEventNo = event.eventno;
+                                selectEventAndRefreshBtn.disabled = false; // 選択ボタンを有効化
+                            };
+                            searchEventsList.appendChild(li);
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error searching events:', error);
+                    alert('イベント検索に失敗しました。');
+                });
+            }
+
+            selectEventAndRefreshBtn.onclick = function() {
+                if (!selectedEventNo) {
+                    alert('イベントを選択してください。');
+                    return;
+                }
+                currentEventId = selectedEventNo; // グローバル変数を更新
+                refreshMainData(); // メインデータを更新
+                closeModal(eventModal); // ポップアップを閉じる
+            }
+
+            // --- ユーザー検索モーダル処理 (前回からの修正) ---
+
+            openUserModalBtn.onclick = function() {
+                closeModal(eventModal); // 他のモーダルが開いていたら閉じる
+                userModal.style.display = 'flex';
+                searchUserNameInput.value = '';
+                searchUsersList.innerHTML = '';
+                noUserResultsMessage.style.display = 'none';
+                selectUserAndRefreshBtn.disabled = true;
+                selectedUserNo = null;
+            }
+
+            userCloseBtn.onclick = function() {
+                closeModal(userModal);
+            }
+
+            searchUserBtn.onclick = function() {
+                const nameQuery = searchUserNameInput.value;
+                searchUsersList.innerHTML = '';
+                noUserResultsMessage.style.display = 'none';
+                selectUserAndRefreshBtn.disabled = true;
+                selectedUserNo = null;
+
+                fetch(`/search-users?name=${encodeURIComponent(nameQuery)}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(users => {
+                    if (users.length === 0) {
+                        noUserResultsMessage.style.display = 'block';
+                    } else {
+                        users.forEach(user => {
+                            const li = document.createElement('li');
+                            li.textContent = `${user.username} (No: ${user.userno})`;
+                            li.dataset.userno = user.userno;
+                            li.onclick = function() {
+                                document.querySelectorAll('#searchUsersList li').forEach(item => { // IDをsearchUsersListに変更
+                                    item.classList.remove('selected');
+                                });
+                                li.classList.add('selected');
+                                selectedUserNo = user.userno;
+                                selectUserAndRefreshBtn.disabled = false;
+                            };
+                            searchUsersList.appendChild(li);
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error searching users:', error);
+                    alert('ユーザー検索に失敗しました。');
+                });
+            }
+
+            selectUserAndRefreshBtn.onclick = function() {
+                if (!selectedUserNo) {
+                    alert('ユーザーを選択してください。');
+                    return;
+                }
+                currentUserNo = selectedUserNo; // グローバル変数を更新
+                refreshMainData(); // メインデータを更新
+                closeModal(userModal); // ポップアップを閉じる
+            }
+
+            // モーダルの外側をクリックで閉じる共通処理
+            window.onclick = function(event) {
+                if (event.target == eventModal) {
+                    closeModal(eventModal);
+                }
+                if (event.target == userModal) {
+                    closeModal(userModal);
+                }
             }
         });
     </script>
